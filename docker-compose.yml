@@ -1,0 +1,11 @@
+services:
+  compose-checker:
+    image: weleone/compose-checker:latest
+    container_name: compose-checker
+    ports:
+      - "8080:8080"
+    environment:
+      - ADMIN_USER=admin
+      - ADMIN_PASS=changeme
+      - SECRET_KEY=change-this-to-random-string
+    restart: unless-stopped

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Compose Checker</title>
+<style>
+*{box-sizing:border-box}body{font-family:system-ui;background:#f5f5f5;margin:0;padding:0}
+header{background:#1F9D55;color:#fff;padding:12px 20px;display:flex;justify-content:space-between;align-items:center}
+header a{color:#fff;text-decoration:none;font-size:13px}
+main{max-width:900px;margin:20px auto;padding:0 16px}
+.card{background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+textarea{width:100%;height:280px;font-family:monospace;font-size:13px;padding:12px;border:1px solid #ddd;border-radius:4px;resize:vertical}
+textarea.tall{height:200px}textarea.short{height:120px}
+.row{display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;align-items:center}
+button{padding:10px 20px;background:#1F9D55;color:#fff;border:0;border-radius:4px;cursor:pointer;font-size:14px}
+button.ghost{background:#5F6368}button.blue{background:#2196F3}
+input[type=file]{font-size:13px}
+.err{background:#fdecea;border:1px solid #f5c6cb;color:#a00;padding:10px 14px;border-radius:4px;margin:8px 0;font-size:13px;white-space:pre-wrap}
+.warn{background:#fff8e1;border:1px solid #ffe082;color:#7a5c00;padding:10px 14px;border-radius:4px;margin:8px 0;font-size:13px}
+.ok{background:#e8f5e9;border:1px solid #a5d6a7;color:#1b5e20;padding:10px 14px;border-radius:4px;margin:8px 0;font-size:13px}
+.out{background:#f7f7f7;border:1px solid #ddd;padding:10px 14px;border-radius:4px;margin:8px 0;font-size:13px;font-family:monospace;white-space:pre-wrap;word-break:break-all}
+#dropOverlay{position:fixed;inset:0;background:rgba(31,157,85,.12);border:3px dashed #1F9D55;display:none;align-items:center;justify-content:center;z-index:999;font-size:20px;color:#1F9D55;font-weight:bold;pointer-events:none}
+h3{margin:0 0 10px;font-size:15px}
+.filelabel{font-size:13px;color:#666}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tab{padding:8px 18px;background:#ddd;border-radius:4px;cursor:pointer;font-size:14px}
+.tab.active{background:#1F9D55;color:#fff}
+.hidden{display:none}
+.svcname{font-weight:bold;margin:10px 0 4px;font-size:13px}
+</style></head>
+<body>
+<header><b>Compose Checker <span style="font-size:12px;font-weight:normal;opacity:.8">v1.0.0</span></b><a href="/logout">退出</a></header>
+<main>
+<div id="dropOverlay">松开鼠标上传文件</div>
+<div class="tabs">
+<div class="tab active" onclick="showTab('check')">检查</div>
+<div class="tab" onclick="showTab('convert')">run ⇄ compose 互转</div>
+</div>
+
+<div id="tab-check">
+<div class="card">
+<h3>检查 docker-compose.yaml</h3>
+<form method="post" enctype="multipart/form-data">
+<div class="row"><span class="filelabel">上传文件：</span><input type="file" name="file" accept=".yml,.yaml"></div>
+<div style="margin-top:12px"><span class="filelabel">或直接粘贴 / 编辑内容：</span></div>
+<textarea name="content" placeholder="在此粘贴 docker-compose.yaml 内容...">{{ content }}</textarea>
+<div class="row">
+<button type="submit">检查</button>
+<button type="button" class="ghost" onclick="document.querySelector('#tab-check textarea').value=''">清空</button>
+</div>
+</form>
+</div>
+{% if filename %}
+<div class="card">
+<h3>检查结果 {% if filename != 'pasted-content' %}({{ filename }}){% endif %}</h3>
+{% if not errors and not warnings %}<div class="ok">✓ 没有发现问题</div>{% endif %}
+{% for e in errors %}<div class="err">✗ {{ e }}</div>{% endfor %}
+{% for w in warnings %}<div class="warn">⚠ {{ w }}</div>{% endfor %}
+{% if errors or warnings %}
+<div class="row">
+<button type="button" class="blue" onclick="autoFix()">一键修正</button>
+</div>
+<div id="fixOut"></div>
+{% endif %}
+</div>
+{% endif %}
+</div>
+
+<div id="tab-convert" class="hidden">
+<div class="card">
+<h3>docker run → compose</h3>
+<textarea id="runInput" class="short" placeholder="粘贴 docker run 命令，如：&#10;docker run -d --name web -p 8080:80 -v /data:/data --restart unless-stopped nginx:1.25"></textarea>
+<div class="row"><button class="blue" onclick="run2compose()">转换 →</button></div>
+<div id="run2composeOut"></div>
+</div>
+<div class="card">
+<h3>compose → docker run</h3>
+<textarea id="composeInput" class="tall" placeholder="粘贴 docker-compose.yaml 内容..."></textarea>
+<div class="row"><button class="blue" onclick="compose2run()">转换 →</button></div>
+<div id="compose2runOut"></div>
+</div>
+</div>
+</main>
+<script>
+function showTab(n){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('tab-check').classList.toggle('hidden', n!=='check');
+  document.getElementById('tab-convert').classList.toggle('hidden', n!=='convert');
+}
+async function run2compose(){
+  const cmd = document.getElementById('runInput').value;
+  const r = await fetch('/api/run2compose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd})});
+  const d = await r.json();
+  const out = document.getElementById('run2composeOut');
+  out.innerHTML = d.ok ? '<div class="out">'+escapeHtml(d.yaml)+'</div>' : '<div class="err">'+escapeHtml(d.error)+'</div>';
+}
+async function compose2run(){
+  const content = document.getElementById('composeInput').value;
+  const r = await fetch('/api/compose2run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content})});
+  const d = await r.json();
+  const out = document.getElementById('compose2runOut');
+  if(!d.ok){ out.innerHTML = '<div class="err">'+escapeHtml(d.error)+'</div>'; return; }
+  out.innerHTML = d.commands.map(c=>'<div class="svcname">服务: '+escapeHtml(c.service)+'</div><div class="out">'+escapeHtml(c.cmd)+'</div>').join('');
+}
+function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+let fixedYaml = '';
+async function autoFix(){
+  const content = document.querySelector('#tab-check textarea').value;
+  const r = await fetch('/api/fix',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content})});
+  const d = await r.json();
+  const out = document.getElementById('fixOut');
+  if(!d.ok){ out.innerHTML = '<div class="err">'+escapeHtml(d.error)+'</div>'; return; }
+  fixedYaml = d.yaml;
+  out.innerHTML = '<div class="ok">✓ 已修正：<br>'+d.fixes.map(escapeHtml).join('<br>')+'</div>'
+    + '<div class="out">'+escapeHtml(d.yaml)+'</div>'
+    + '<div class="row"><button class="blue" onclick="downloadFixed()">导出修正后的文件</button></div>';
+}
+function downloadFixed(){
+  const blob = new Blob([fixedYaml], {type:'text/yaml'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'docker-compose.fixed.yml';
+  a.click();
+}
+// 拖放上传
+(function(){
+  const overlay = document.getElementById('dropOverlay');
+  let dragCount = 0;
+  window.addEventListener('dragenter', e => { e.preventDefault(); dragCount++; overlay.style.display = 'flex'; });
+  window.addEventListener('dragleave', e => { e.preventDefault(); if(--dragCount <= 0){ dragCount = 0; overlay.style.display = 'none'; } });
+  window.addEventListener('dragover', e => e.preventDefault());
+  window.addEventListener('drop', e => {
+    e.preventDefault(); dragCount = 0; overlay.style.display = 'none';
+    const f = e.dataTransfer.files[0];
+    if(!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const ta = document.querySelector('#tab-check textarea');
+      if(ta){ ta.value = reader.result; switchTab('check'); ta.focus(); }
+    };
+    reader.readAsText(f);
+  });
+})();
+</script>
+</body></html>
